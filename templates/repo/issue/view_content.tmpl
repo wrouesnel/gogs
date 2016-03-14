@@ -160,32 +160,34 @@
 									<span class="octicon octicon-sync"></span>
 									{{$.i18n.Tr "repo.pulls.is_checking"}}
 								</div>
-							{{else if .Issue.CanAutoMerge}}
+							{{else if or .Issue.CanAutoMerge .Issue.CanAutoFastForwardMerge}}
 								<div class="item text green">
 									<span class="octicon octicon-check"></span>
 									{{$.i18n.Tr "repo.pulls.can_auto_merge_desc"}}
 								</div>
 								{{if .IsRepositoryWriter}}
-									<div class="ui divider"></div>
-									<div>
-										<form class="ui form" action="{{.Link}}/merge" method="post">
-											{{.CsrfTokenHtml}}
-											<button class="ui green button">
-												<span class="octicon octicon-git-merge"></span> {{$.i18n.Tr "repo.pulls.merge_pull_request"}}
-											</button>
-										</form>
-									</div>
-
-									<div class="ui divider"></div>
-									<div>
-										<form class="ui form" action="{{.Link}}/fastforwardmerge" method="post">
-											{{.CsrfTokenHtml}}
-											<button class="ui green button">
-												<span class="octicon octicon-git-merge"></span> {{$.i18n.Tr "repo.pulls.fast_forward_merge_pull_request"}}
-											</button>
-										</form>
-									</div>
-
+									{{if .Issue.CanAutoMerge}}
+										<div class="ui divider"></div>
+										<div>
+											<form class="ui form" action="{{.Link}}/merge" method="post">
+												{{.CsrfTokenHtml}}
+												<button class="ui green button">
+													<span class="octicon octicon-git-merge"></span> {{$.i18n.Tr "repo.pulls.merge_pull_request"}}
+												</button>
+											</form>
+										</div>
+									{{end}}
+									{{if .Issue.CanAutoFastForwardMerge}}
+										<div class="ui divider"></div>
+										<div>
+											<form class="ui form" action="{{.Link}}/fastforwardmerge" method="post">
+												{{.CsrfTokenHtml}}
+												<button class="ui green button">
+													<span class="octicon octicon-git-merge"></span> {{$.i18n.Tr "repo.pulls.fast_forward_merge_pull_request"}}
+												</button>
+											</form>
+										</div>
+									{{end}}
 								{{end}}
 							{{else}}
 								<div class="item text red">

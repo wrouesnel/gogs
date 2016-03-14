@@ -129,6 +129,12 @@ func (pr *PullRequest) CanAutoMerge() bool {
 	return pr.Status == PULL_REQUEST_STATUS_MERGEABLE
 }
 
+// CanAutoMerge returns true if this pull request can be merged automatically.
+func (pr *PullRequest) CanAutoFastForwardMerge() bool {
+	// TODO: fix the auto pull request check
+	return pr.Status == PULL_REQUEST_STATUS_MERGEABLE
+}
+
 // Merge merges pull request to base repository.
 func (pr *PullRequest) Merge(doer *User, baseGitRepo *git.Repository) (err error) {
 	if err = pr.GetHeadRepo(); err != nil {
