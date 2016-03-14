@@ -514,6 +514,7 @@ func runWeb(ctx *cli.Context) {
 			m.Get("/commits", context.RepoRef(), repo.ViewPullCommits)
 			m.Get("/files", context.RepoRef(), repo.ViewPullFiles)
 			m.Post("/merge", reqRepoWriter, repo.MergePullRequest)
+			m.Post("/fastforwardmerge", reqRepoWriter, repo.FastForwardMergePullRequest)
 		}, repo.MustAllowPulls)
 
 		m.Group("", func() {

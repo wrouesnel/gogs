@@ -256,6 +256,133 @@ func (pr *PullRequest) Merge(doer *User, baseGitRepo *git.Repository) (err error
 	return nil
 }
 
+// FastForwardMerge merges pull request to base repository using the fast-forward strategy.
+func (pr *PullRequest) FastForwardMerge(doer *User, baseGitRepo *git.Repository) (err error) {
+	if err = pr.GetHeadRepo(); err != nil {
+		return fmt.Errorf("GetHeadRepo: %v", err)
+	} else if err = pr.GetBaseRepo(); err != nil {
+		return fmt.Errorf("GetBaseRepo: %v", err)
+	}
+
+	sess := x.NewSession()
+	defer sessionRelease(sess)
+	if err = sess.Begin(); err != nil {
+		return err
+	}
+
+	if err = pr.Issue.changeStatus(sess, doer, pr.Issue.Repo, true); err != nil {
+		return fmt.Errorf("Issue.changeStatus: %v", err)
+	}
+
+	headRepoPath := RepoPath(pr.HeadUserName, pr.HeadRepo.Name)
+	headGitRepo, err := git.OpenRepository(headRepoPath)
+	if err != nil {
+		return fmt.Errorf("OpenRepository: %v", err)
+	}
+	pr.MergedCommitID, err = headGitRepo.GetBranchCommitID(pr.HeadBranch)
+	if err != nil {
+		return fmt.Errorf("GetBranchCommitID: %v", err)
+	}
+
+	if err = mergePullRequestAction(sess, doer, pr.Issue.Repo, pr.Issue); err != nil {
+		return fmt.Errorf("mergePullRequestAction: %v", err)
+	}
+
+	pr.HasMerged = true
+	pr.Merged = time.Now()
+	pr.MergerID = doer.Id
+	if _, err = sess.Id(pr.ID).AllCols().Update(pr); err != nil {
+		return fmt.Errorf("update pull request: %v", err)
+	}
+
+	// Clone base repo.
+	tmpBasePath := path.Join(setting.AppDataPath, "tmp/repos", com.ToStr(time.Now().Nanosecond())+".git")
+	os.MkdirAll(path.Dir(tmpBasePath), os.ModePerm)
+	defer os.RemoveAll(path.Dir(tmpBasePath))
+
+	var stderr string
+	if _, stderr, err = process.ExecTimeout(5*time.Minute,
+		fmt.Sprintf("PullRequest.FastForwardMerge (git clone): %s", tmpBasePath),
+		"git", "clone", baseGitRepo.Path, tmpBasePath); err != nil {
+		return fmt.Errorf("git clone: %s", stderr)
+	}
+
+	// Check out base branch.
+	if _, stderr, err = process.ExecDir(-1, tmpBasePath,
+		fmt.Sprintf("PullRequest.FastForwardMerge (git checkout): %s", tmpBasePath),
+		"git", "checkout", pr.BaseBranch); err != nil {
+		return fmt.Errorf("git checkout: %s", stderr)
+	}
+
+	// Add head repo remote.
+	if _, stderr, err = process.ExecDir(-1, tmpBasePath,
+		fmt.Sprintf("PullRequest.FastForwardMerge (git remote add): %s", tmpBasePath),
+		"git", "remote", "add", "head_repo", headRepoPath); err != nil {
+		return fmt.Errorf("git remote add [%s -> %s]: %s", headRepoPath, tmpBasePath, stderr)
+	}
+
+	// Merge commits.
+	if _, stderr, err = process.ExecDir(-1, tmpBasePath,
+		fmt.Sprintf("PullRequest.FastForwardMerge (git fetch): %s", tmpBasePath),
+		"git", "fetch", "head_repo"); err != nil {
+		return fmt.Errorf("git fetch [%s -> %s]: %s", headRepoPath, tmpBasePath, stderr)
+	}
+
+	if _, stderr, err = process.ExecDir(-1, tmpBasePath,
+		fmt.Sprintf("PullRequest.FastForwardMerge (git merge --no-ff --no-commit): %s", tmpBasePath),
+		"git", "merge", "--no-ff", "--no-commit", "head_repo/"+pr.HeadBranch); err != nil {
+		return fmt.Errorf("git merge --ff-only --no-commit [%s]: %v - %s", tmpBasePath, err, stderr)
+	}
+
+	sig := doer.NewGitSig()
+	if _, stderr, err = process.ExecDir(-1, tmpBasePath,
+		fmt.Sprintf("PullRequest.FastForwardMerge (git merge): %s", tmpBasePath),
+		"git", "commit", fmt.Sprintf("--author='%s <%s>'", sig.Name, sig.Email),
+		"-m", fmt.Sprintf("Merge branch '%s' of %s/%s into %s", pr.HeadBranch, pr.HeadUserName, pr.HeadRepo.Name, pr.BaseBranch)); err != nil {
+		return fmt.Errorf("git commit [%s]: %v - %s", tmpBasePath, err, stderr)
+	}
+
+	// Push back to upstream.
+	if _, stderr, err = process.ExecDir(-1, tmpBasePath,
+		fmt.Sprintf("PullRequest.FastForwardMerge (git push): %s", tmpBasePath),
+		"git", "push", baseGitRepo.Path, pr.BaseBranch); err != nil {
+		return fmt.Errorf("git push: %s", stderr)
+	}
+
+	if err = sess.Commit(); err != nil {
+		return fmt.Errorf("Commit: %v", err)
+	}
+
+	// Compose commit repository action
+	l, err := headGitRepo.CommitsBetweenIDs(pr.MergedCommitID, pr.MergeBase)
+	if err != nil {
+		return fmt.Errorf("CommitsBetween: %v", err)
+	}
+	p := &api.PushPayload{
+		Ref:        "refs/heads/" + pr.BaseBranch,
+		Before:     pr.MergeBase,
+		After:      pr.MergedCommitID,
+		CompareUrl: setting.AppUrl + pr.BaseRepo.ComposeCompareURL(pr.MergeBase, pr.MergedCommitID),
+		Commits:    ListToPushCommits(l).ToApiPayloadCommits(pr.BaseRepo.FullRepoLink()),
+		Repo:       pr.BaseRepo.ComposePayload(),
+		Pusher: &api.PayloadAuthor{
+			Name:     pr.HeadRepo.MustOwner().DisplayName(),
+			Email:    pr.HeadRepo.MustOwner().Email,
+			UserName: pr.HeadRepo.MustOwner().Name,
+		},
+		Sender: &api.PayloadUser{
+			UserName:  doer.Name,
+			ID:        doer.Id,
+			AvatarUrl: setting.AppUrl + doer.RelAvatarLink(),
+		},
+	}
+	if err = PrepareWebhooks(pr.BaseRepo, HOOK_EVENT_PUSH, p); err != nil {
+		return fmt.Errorf("PrepareWebhooks: %v", err)
+	}
+	go HookQueue.Add(pr.BaseRepo.ID)
+	return nil
+}
+
 // patchConflicts is a list of conflit description from Git.
 var patchConflicts = []string{
 	"patch does not apply",

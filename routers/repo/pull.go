@@ -410,6 +410,42 @@ func MergePullRequest(ctx *context.Context) {
 	ctx.Redirect(ctx.Repo.RepoLink + "/pulls/" + com.ToStr(pr.Index))
 }
 
+func FastForwardMergePullRequest(ctx *context.Context) {
+	issue := checkPullInfo(ctx)
+	if ctx.Written() {
+		return
+	}
+	if issue.IsClosed {
+		ctx.Handle(404, "FastForwardMergePullRequest", nil)
+		return
+	}
+
+	pr, err := models.GetPullRequestByIssueID(issue.ID)
+	if err != nil {
+		if models.IsErrPullRequestNotExist(err) {
+			ctx.Handle(404, "GetPullRequestByIssueID", nil)
+		} else {
+			ctx.Handle(500, "GetPullRequestByIssueID", err)
+		}
+		return
+	}
+
+	if !pr.CanAutoFastForwardMerge() || pr.HasMerged {
+		ctx.Handle(404, "FastForwardMergePullRequest", nil)
+		return
+	}
+
+	pr.Issue = issue
+	pr.Issue.Repo = ctx.Repo.Repository
+	if err = pr.Merge(ctx.User, ctx.Repo.GitRepo); err != nil {
+		ctx.Handle(500, "FastForwardMerge", err)
+		return
+	}
+
+	log.Trace("Pull request merged (fast-forward): %d", pr.ID)
+	ctx.Redirect(ctx.Repo.RepoLink + "/pulls/" + com.ToStr(pr.Index))
+}
+
 func ParseCompareInfo(ctx *context.Context) (*models.User, *models.Repository, *git.Repository, *git.PullRequestInfo, string, string) {
 	baseRepo := ctx.Repo.Repository
 

@@ -175,6 +175,17 @@
 											</button>
 										</form>
 									</div>
+
+									<div class="ui divider"></div>
+									<div>
+										<form class="ui form" action="{{.Link}}/fastforwardmerge" method="post">
+											{{.CsrfTokenHtml}}
+											<button class="ui green button">
+												<span class="octicon octicon-git-merge"></span> {{$.i18n.Tr "repo.pulls.fast_forward_merge_pull_request"}}
+											</button>
+										</form>
+									</div>
+
 								{{end}}
 							{{else}}
 								<div class="item text red">
