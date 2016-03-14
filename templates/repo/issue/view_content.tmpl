@@ -161,13 +161,20 @@
 									{{$.i18n.Tr "repo.pulls.is_checking"}}
 								</div>
 							{{else if or .Issue.CanAutoMerge .Issue.CanAutoFastForwardMerge}}
-								<div class="item text green">
-									<span class="octicon octicon-check"></span>
-									{{$.i18n.Tr "repo.pulls.can_auto_merge_desc"}}
-								</div>
 								{{if .IsRepositoryWriter}}
+									{{if .Issue.CanAutoFastForwardMerge}}
+										<div class="item text green">
+											<span class="octicon octicon-check"></span>
+											{{$.i18n.Tr "repo.pulls.can_auto_fastforwardmerge_desc"}}
+										</div>
+									{{else if .Issue.CanAutoMerge}}
+										<div class="item text green">
+											<span class="octicon octicon-check"></span>
+											{{$.i18n.Tr "repo.pulls.can_auto_merge_desc"}}
+										</div>
+									{{end}}
+                                    <div class="ui divider"></div>
 									{{if .Issue.CanAutoMerge}}
-										<div class="ui divider"></div>
 										<div>
 											<form class="ui form" action="{{.Link}}/merge" method="post">
 												{{.CsrfTokenHtml}}
@@ -178,7 +185,6 @@
 										</div>
 									{{end}}
 									{{if .Issue.CanAutoFastForwardMerge}}
-										<div class="ui divider"></div>
 										<div>
 											<form class="ui form" action="{{.Link}}/fastforwardmerge" method="post">
 												{{.CsrfTokenHtml}}

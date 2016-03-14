@@ -35,6 +35,7 @@ const (
 	PULL_REQUEST_STATUS_CONFLICT PullRequestStatus = iota
 	PULL_REQUEST_STATUS_CHECKING
 	PULL_REQUEST_STATUS_MERGEABLE
+	PULL_REQUEST_STATUS_FASTFORWARDABLE
 )
 
 // PullRequest represents relation between pull request and repositories.
@@ -126,13 +127,12 @@ func (pr *PullRequest) IsChecking() bool {
 
 // CanAutoMerge returns true if this pull request can be merged automatically.
 func (pr *PullRequest) CanAutoMerge() bool {
-	return pr.Status == PULL_REQUEST_STATUS_MERGEABLE
+	return pr.Status == PULL_REQUEST_STATUS_MERGEABLE || pr.Status == PULL_REQUEST_STATUS_FASTFORWARDABLE
 }
 
 // CanAutoMerge returns true if this pull request can be merged automatically.
 func (pr *PullRequest) CanAutoFastForwardMerge() bool {
-	// TODO: fix the auto pull request check
-	return pr.Status == PULL_REQUEST_STATUS_MERGEABLE
+	return pr.Status == PULL_REQUEST_STATUS_FASTFORWARDABLE
 }
 
 // Merge merges pull request to base repository.
@@ -424,6 +424,46 @@ func (pr *PullRequest) testPatch() (err error) {
 		return fmt.Errorf("UpdateLocalCopy: %v", err)
 	}
 
+	pr.Status = PULL_REQUEST_STATUS_CHECKING
+	// Fast-forward checks are relatively simple, and if they pass then the
+	// branch is also *definitely* mergeable
+	baseRepo, err := git.OpenRepository(pr.BaseRepo.LocalCopyPath())
+	if err != nil {
+		return fmt.Errorf("OpenRepository (BaseRepo): %v", err)
+	}
+	baseCommit, err := baseRepo.GetBranchCommitID(pr.BaseBranch)
+	if err != nil {
+		return fmt.Errorf("GetBranchCommitID (BaseRepo): %v", err)
+	}
+
+	headRepoPath := RepoPath(pr.HeadUserName, pr.HeadRepo.Name)
+	headRepo, err := git.OpenRepository(headRepoPath)
+	if err != nil {
+		return fmt.Errorf("OpenRepository (HeadRepo): %v", err)
+	}
+	headCommit, err := headRepo.GetBranchCommitID(pr.HeadBranch)
+	if err != nil {
+		return fmt.Errorf("GetBranchCommitID (HeadRepo): %v", err)
+	}
+
+	log.Trace("PullRequest[%d].testPatch (baseCommit): %s", pr.ID, baseCommit)
+	log.Trace("PullRequest[%d].testPatch (headCommit): %s", pr.ID, headCommit)
+	log.Trace("PullRequest[%d].testPatch (headRepoPath): %s", pr.ID, headRepoPath)
+
+	_, _, err = process.ExecDir(-1, headRepoPath,
+		fmt.Sprintf("testPatch (git merge-base --is-ancestor): %d", pr.BaseRepo.ID),
+		"git", "merge-base", "--is-ancestor", headCommit, baseCommit)
+	if err == nil {
+		// Check succeeded, so we are a fast-forward branch
+		pr.Status = PULL_REQUEST_STATUS_FASTFORWARDABLE
+		log.Trace("PullRequest[%d].testPatch: is fast forwardable", pr.ID)
+		return nil
+	} else {
+		log.Trace("PullRequest[%d].testPatch: not fast forwardable: %v", pr.ID, err)
+	}
+
+	// Merge checking checks if the patches match up.
+
 	// Checkout base branch.
 	_, stderr, err := process.ExecDir(-1, pr.BaseRepo.LocalCopyPath(),
 		fmt.Sprintf("PullRequest.Merge (git checkout): %v", pr.BaseRepo.ID),
@@ -432,7 +472,6 @@ func (pr *PullRequest) testPatch() (err error) {
 		return fmt.Errorf("git checkout: %s", stderr)
 	}
 
-	pr.Status = PULL_REQUEST_STATUS_CHECKING
 	_, stderr, err = process.ExecDir(-1, pr.BaseRepo.LocalCopyPath(),
 		fmt.Sprintf("testPatch (git apply --check): %d", pr.BaseRepo.ID),
 		"git", "apply", "--check", patchPath)
@@ -711,6 +750,7 @@ func ChangeUsernameInPullRequests(oldUserName, newUserName string) error {
 func (pr *PullRequest) checkAndUpdateStatus() {
 	// Status is not changed to conflict means mergeable.
 	if pr.Status == PULL_REQUEST_STATUS_CHECKING {
+		// FIXME: need to reconcile this
 		pr.Status = PULL_REQUEST_STATUS_MERGEABLE
 	}
 
